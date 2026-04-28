@@ -190,7 +190,10 @@ class ToolTip:
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
         self.tip = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
+        tw.attributes("-topmost", True)
+        tw.transient(self.widget.winfo_toplevel())
         tw.wm_geometry(f"+{x}+{y}")
+        tw.lift()
         tk.Label(tw, text=self.text, justify="left",
                  bg="#1d1d2b", fg="#e8e8ff",
                  relief="solid", bd=1, padx=6, pady=4,
@@ -626,6 +629,7 @@ class OverlayApp:
         self.settings_win  = None
 
         self.sdx = self.sdy = self.srot = 0.0
+        self.cue_x = self.cue_y = 0.0
         self._dots    = []
         self._dot_ids = {}
         self._prev_count  = -1
@@ -794,13 +798,28 @@ class OverlayApp:
         self.sdy  += (raw_y - self.sdy)  * sa
         self.srot += (raw_r - self.srot) * sa
 
+        # Inertial cue integrator:
+        # - integrates acceleration into a short-lived "motion intent"
+        # - suppresses tiny opposite-sign blips that cause rebound feel
+        # - washes out to zero when acceleration is gone
+        ix, iy = self.sdx, self.sdy
+        if self.cue_x * ix < 0 and abs(ix) < (abs(self.cue_x) * 0.75):
+            ix = 0.0
+        if self.cue_y * iy < 0 and abs(iy) < (abs(self.cue_y) * 0.75):
+            iy = 0.0
+
+        cue_gain = 1.8
+        washout = 1.35
+        self.cue_x = (self.cue_x + ix * cue_gain * dt) * math.exp(-washout * dt)
+        self.cue_y = (self.cue_y + iy * cue_gain * dt) * math.exp(-washout * dt)
+
         # Rebuild if dot count or layers changed
         if (s["dot_count"] != self._prev_count or
                 s["parallax_layers"] != self._prev_layers):
             self._build_dots()
 
         for dot in self._dots:
-            dot.update(self.sdx, self.sdy, self.srot, dt, s)
+            dot.update(self.cue_x, self.cue_y, self.srot, dt, s)
             self._redraw_dot(dot)
 
         self.canvas.tag_raise("gear")
