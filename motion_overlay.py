@@ -115,13 +115,14 @@ class PhyphoxPoller:
 # ── Dot particle ──────────────────────────────────────────────────────────────
 class Dot:
     def __init__(self, sw, sh, layer, n_layers):
-        self.sw     = sw
-        self.sh     = sh
-        self.x      = random.uniform(0, sw)
-        self.y      = random.uniform(0, sh)
-        self.vx     = 0.0
-        self.vy     = 0.0
-        self.depth  = 1.0 - (layer / max(1, n_layers)) * 0.7
+        self.sw         = sw
+        self.sh         = sh
+        self.x          = random.uniform(0, sw)
+        self.y          = random.uniform(0, sh)
+        self.vx         = 0.0
+        self.vy         = 0.0
+        self.depth      = 1.0 - (layer / max(1, n_layers)) * 0.7
+        self.size_scale = random.uniform(0.45, 1.65)
 
     def update(self, dx, dy, rot, dt, s):
         sens  = s["motion_sensitivity"]
@@ -657,6 +658,33 @@ class SettingsWindow:
         except Exception:
             pass
 
+# ── Snowflake geometry ────────────────────────────────────────────────────────
+def _snowflake_line_coords(cx, cy, r):
+    """
+    Returns 15 (x1,y1,x2,y2) tuples for a geometric snowflake:
+      3 full-diameter axis lines + 2 branches per arm (6 arms × 2 = 12).
+    """
+    segs = []
+    bf = 0.55          # branch point as fraction of arm length
+    bl = r * 0.38      # branch line length
+
+    for i in range(3):
+        ang = i * math.pi / 3
+        segs.append((cx + r * math.cos(ang), cy + r * math.sin(ang),
+                     cx - r * math.cos(ang), cy - r * math.sin(ang)))
+
+    for i in range(6):
+        arm_ang = i * math.pi / 3
+        bx = cx + bf * r * math.cos(arm_ang)
+        by = cy + bf * r * math.sin(arm_ang)
+        for b_sign in (1, -1):
+            b_ang = arm_ang + b_sign * math.pi / 3
+            segs.append((bx, by,
+                         bx + bl * math.cos(b_ang),
+                         by + bl * math.sin(b_ang)))
+    return segs  # 3 + 12 = 15 segments
+
+
 # ── Main overlay app ──────────────────────────────────────────────────────────
 class OverlayApp:
     def __init__(self):
@@ -784,9 +812,8 @@ class OverlayApp:
         style = self.settings.get("visual_style", "Dots")
         ids = []
         if style == "Snowflakes":
-            ids.append(self.canvas.create_text(
-                dot.x, dot.y, text="❄", fill="#ffffff",
-                font=("Segoe UI Symbol", max(8, int(self.settings["dot_size"] * 2.2)))))
+            for _ in range(15):
+                ids.append(self.canvas.create_line(0, 0, 0, 0, fill=CHROMA, width=1))
             return ids
         if self.settings.get("glow_enabled", True):
             for _ in range(3):
@@ -812,10 +839,12 @@ class OverlayApp:
 
         if style == "Snowflakes":
             col = blend_to_black(base, do)
-            self.canvas.coords(ids[0], x, y)
-            self.canvas.itemconfig(
-                ids[0], text="❄", fill=col,
-                font=("Segoe UI Symbol", max(8, int(size * (1.5 + depth)))))
+            r_sf = max(4, int(size * (1.0 + depth * 0.7) * dot.size_scale))
+            lw   = max(1, round(r_sf / 7))
+            for lid, (x1, y1, x2, y2) in zip(
+                    ids, _snowflake_line_coords(x, y, r_sf)):
+                self.canvas.coords(lid, x1, y1, x2, y2)
+                self.canvas.itemconfig(lid, fill=col, width=lw)
             return
 
         if glow and len(ids) == 3:
