@@ -108,13 +108,15 @@ class PhyphoxPoller:
 # ── Dot particle ──────────────────────────────────────────────────────────────
 class Dot:
     def __init__(self, sw, sh, layer, n_layers):
-        self.sw    = sw
-        self.sh    = sh
-        self.x     = random.uniform(0, sw)
-        self.y     = random.uniform(0, sh)
-        self.vx    = 0.0
-        self.vy    = 0.0
-        self.depth = 1.0 - (layer / max(1, n_layers)) * 0.7
+        self.sw     = sw
+        self.sh     = sh
+        self.home_x = random.uniform(0, sw)
+        self.home_y = random.uniform(0, sh)
+        self.x      = self.home_x
+        self.y      = self.home_y
+        self.vx     = 0.0
+        self.vy     = 0.0
+        self.depth  = 1.0 - (layer / max(1, n_layers)) * 0.7
 
     def update(self, dx, dy, rot, dt, s):
         sens  = s["motion_sensitivity"]
@@ -122,10 +124,19 @@ class Dot:
         drift = s["drift_speed"]
         df    = self.depth
 
-        tx = -dx * sens * df * 60
-        ty =  dy * sens * df * 60
-        self.vx += (tx - self.vx) * smth
-        self.vy += (ty - self.vy) * smth
+        # Target: home position displaced by current acceleration (parallax inertia).
+        # Uses displacement, not velocity, so dots return to rest when acc → 0
+        # instead of carrying momentum in the wrong direction (the old "rebound").
+        tgt_x = self.home_x - dx * sens * df * 25
+        tgt_y = self.home_y + dy * sens * df * 25
+
+        # Spring-damper: stiffness scales with Smoothing slider (higher = snappier).
+        # Slightly underdamped (0.85) gives a natural, living feel without overshoot.
+        spring_k = 30.0 + smth * 270.0
+        damp_c   = 2.0 * math.sqrt(spring_k) * 0.85
+
+        self.vx += ((tgt_x - self.x) * spring_k - self.vx * damp_c) * dt
+        self.vy += ((tgt_y - self.y) * spring_k - self.vy * damp_c) * dt
 
         if s["rotation_enabled"] and abs(rot) > 0.03:
             cx, cy = self.sw / 2, self.sh / 2
@@ -134,16 +145,34 @@ class Dot:
             ca, sa = math.cos(ang), math.sin(ang)
             self.x = cx + rx * ca - ry * sa
             self.y = cy + rx * sa + ry * ca
+            # Rotate home too so the spring target stays coherent
+            rx2, ry2 = self.home_x - cx, self.home_y - cy
+            self.home_x = cx + rx2 * ca - ry2 * sa
+            self.home_y = cy + rx2 * sa + ry2 * ca
 
         self.x += self.vx * dt
         self.y += self.vy * dt
-        self.y -= drift * df * dt
 
+        # Drift: advance home upward; dot follows smoothly via spring
+        self.home_y -= drift * df * dt
+
+        # Wrap home position while keeping the current spring offset intact
         m = 50
-        if self.x < -m:          self.x = self.sw + m
-        if self.x > self.sw + m: self.x = -m
-        if self.y < -m:          self.y = self.sh + m
-        if self.y > self.sh + m: self.y = -m
+        off_x = self.x - self.home_x
+        off_y = self.y - self.home_y
+
+        if self.home_x < -m:
+            self.home_x = self.sw + m
+            self.x = self.home_x + off_x
+        elif self.home_x > self.sw + m:
+            self.home_x = -m
+            self.x = self.home_x + off_x
+        if self.home_y < -m:
+            self.home_y = self.sh + m
+            self.y = self.home_y + off_y
+        elif self.home_y > self.sh + m:
+            self.home_y = -m
+            self.y = self.home_y + off_y
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
 def hex_to_rgb(h):
@@ -647,14 +676,17 @@ class OverlayApp:
         self._last_t = now
 
         s     = self.settings
-        smth  = s["smoothing"]
         raw_x = self.poller.acc_x
         raw_y = self.poller.acc_y
         raw_r = self.poller.gyr_z if s["rotation_enabled"] else 0.0
 
-        self.sdx  += (raw_x - self.sdx)  * smth
-        self.sdy  += (raw_y - self.sdy)  * smth
-        self.srot += (raw_r - self.srot) * smth
+        # Fast sensor noise filter (fixed ~24 ms time-constant at 60 fps).
+        # The spring in each dot provides the perceived "smoothness"; this just
+        # removes high-frequency jitter from the Phyphox stream.
+        _SA = 0.7
+        self.sdx  += (raw_x - self.sdx)  * _SA
+        self.sdy  += (raw_y - self.sdy)  * _SA
+        self.srot += (raw_r - self.srot) * _SA
 
         # Rebuild if dot count or layers changed
         if (s["dot_count"] != self._prev_count or
