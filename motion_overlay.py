@@ -44,6 +44,7 @@ DEFAULT_SETTINGS = {
     "dot_size":           5,
     "dot_opacity":        210,
     "dot_color":          "#ffffff",
+    "visual_style":       "Dots",
     "motion_sensitivity": 3.5,
     "smoothing":          0.10,
     "parallax_layers":    3,
@@ -228,6 +229,7 @@ class SettingsWindow:
         self.win.configure(bg="#12121e")
         self.win.resizable(False, False)
         self.win.attributes("-topmost", True)
+        self.win.overrideredirect(True)  # hide OS title bar for cleaner look
         self.win.protocol("WM_DELETE_WINDOW", self.close)
 
         self._status_job = None
@@ -253,6 +255,12 @@ class SettingsWindow:
                                    bg="#12121e", fg="#50dc78",
                                    font=("Segoe UI", 9))
         self.status_lbl.pack(pady=(0, 6))
+        # Drag window by header (since we removed the native title bar)
+        header.bind("<ButtonPress-1>", self._start_drag)
+        header.bind("<B1-Motion>", self._drag_win)
+        for child in header.winfo_children():
+            child.bind("<ButtonPress-1>", self._start_drag)
+            child.bind("<B1-Motion>", self._drag_win)
 
         tk.Frame(header, bg="#2a2a40", height=1).pack(fill="x", padx=14)
 
@@ -345,6 +353,25 @@ class SettingsWindow:
                  font=("Segoe UI", 10)).pack(side="left")
 
         tk.Frame(c, bg="#2a2a40", height=1).pack(fill="x", padx=14, pady=6)
+
+        # ── Visual style ───────────────────────────────────────────────────────
+        style_row = tk.Frame(c, bg="#12121e")
+        style_row.pack(fill="x", padx=14, pady=2)
+        tk.Label(style_row, text="Visual Style", bg="#12121e", fg="#b0b0c0",
+                 font=("Segoe UI", 10), width=13, anchor="w").pack(side="left")
+        self._style_var = tk.StringVar(value=self.settings.get("visual_style", "Dots"))
+        style_menu = tk.OptionMenu(style_row, self._style_var, "Dots", "Snowflakes", "Grid")
+        style_menu.config(bg="#1e1e30", fg="#e0e0f0", activebackground="#2a2a44",
+                          activeforeground="#ffffff", relief="flat", highlightthickness=0,
+                          font=("Segoe UI", 10), width=12)
+        style_menu["menu"].config(bg="#1e1e30", fg="#e0e0f0",
+                                  activebackground="#2a2a44", activeforeground="#ffffff")
+        style_menu.pack(side="left")
+        self._tip(style_menu, "Choose between particles or a single moving grid.")
+        def on_style(*_):
+            self.settings["visual_style"] = self._style_var.get()
+            self.on_rebuild()
+        self._style_var.trace_add("write", on_style)
 
         # ── Sliders ───────────────────────────────────────────────────────────
         self._svars = {}
@@ -570,6 +597,15 @@ class SettingsWindow:
     def _tip(self, widget, text):
         self._tips.append(ToolTip(widget, text))
 
+    def _start_drag(self, event):
+        self._drag_off_x = event.x_root - self.win.winfo_x()
+        self._drag_off_y = event.y_root - self.win.winfo_y()
+
+    def _drag_win(self, event):
+        x = event.x_root - getattr(self, "_drag_off_x", 0)
+        y = event.y_root - getattr(self, "_drag_off_y", 0)
+        self.win.geometry(f"+{x}+{y}")
+
     def sync_gear_sliders(self, gx, gy):
         """Called from outside when gear is dragged on canvas."""
         try:
@@ -632,8 +668,12 @@ class OverlayApp:
         self.cue_x = self.cue_y = 0.0
         self._dots    = []
         self._dot_ids = {}
+        self._grid_ids = []
+        self._grid_phase_x = 0.0
+        self._grid_phase_y = 0.0
         self._prev_count  = -1
         self._prev_layers = -1
+        self._prev_style  = None
 
         self._build_window()
         self._build_dots()
@@ -718,13 +758,22 @@ class OverlayApp:
         for ids in self._dot_ids.values():
             for i in ids:
                 self.canvas.delete(i)
+        for gid in self._grid_ids:
+            self.canvas.delete(gid)
         self._dots    = []
         self._dot_ids = {}
+        self._grid_ids = []
 
         n      = self.settings["dot_count"]
         layers = max(1, self.settings["parallax_layers"])
+        style  = self.settings.get("visual_style", "Dots")
         self._prev_count  = n
         self._prev_layers = layers
+        self._prev_style  = style
+
+        if style == "Grid":
+            self._build_grid()
+            return
 
         for i in range(n):
             d = Dot(self.SW, self.SH, i % layers, layers)
@@ -732,7 +781,13 @@ class OverlayApp:
             self._dot_ids[id(d)] = self._make_items(d)
 
     def _make_items(self, dot):
+        style = self.settings.get("visual_style", "Dots")
         ids = []
+        if style == "Snowflakes":
+            ids.append(self.canvas.create_text(
+                dot.x, dot.y, text="❄", fill="#ffffff",
+                font=("Segoe UI Symbol", max(8, int(self.settings["dot_size"] * 2.2)))))
+            return ids
         if self.settings.get("glow_enabled", True):
             for _ in range(3):
                 ids.append(self.canvas.create_oval(0, 0, 1, 1,
@@ -745,6 +800,7 @@ class OverlayApp:
     def _redraw_dot(self, dot):
         ids   = self._dot_ids[id(dot)]
         s     = self.settings
+        style = s.get("visual_style", "Dots")
         size  = s["dot_size"]
         base  = s["dot_color"]
         op    = s["dot_opacity"] / 255.0
@@ -753,6 +809,14 @@ class OverlayApp:
         r     = max(1, int(size * (0.4 + depth * 0.6)))
         do    = op * (0.35 + depth * 0.65)
         glow  = s.get("glow_enabled", True)
+
+        if style == "Snowflakes":
+            col = blend_to_black(base, do)
+            self.canvas.coords(ids[0], x, y)
+            self.canvas.itemconfig(
+                ids[0], text="❄", fill=col,
+                font=("Segoe UI Symbol", max(8, int(size * (1.5 + depth)))))
+            return
 
         if glow and len(ids) == 3:
             for oid, (ring_r, ring_op) in zip(
@@ -767,6 +831,48 @@ class OverlayApp:
             col = blend_to_black(base, do)
             self.canvas.coords(ids[0], x - r, y - r, x + r, y + r)
             self.canvas.itemconfig(ids[0], fill=col)
+
+    def _build_grid(self):
+        s = self.settings
+        spacing = max(20, int(s["dot_size"] * 10))
+        color = blend_to_black(s["dot_color"], s["dot_opacity"] / 255.0 * 0.55)
+        self._grid_phase_x = 0.0
+        self._grid_phase_y = 0.0
+        margin = spacing * 3
+        for x in range(-margin, self.SW + margin + 1, spacing):
+            self._grid_ids.append(self.canvas.create_line(
+                x, -margin, x, self.SH + margin, fill=color, width=1))
+        for y in range(-margin, self.SH + margin + 1, spacing):
+            self._grid_ids.append(self.canvas.create_line(
+                -margin, y, self.SW + margin, y, fill=color, width=1))
+
+    def _redraw_grid(self, cue_x, cue_y, dt):
+        if not self._grid_ids:
+            return
+        s = self.settings
+        spacing = max(20, int(s["dot_size"] * 10))
+        color = blend_to_black(s["dot_color"], s["dot_opacity"] / 255.0 * 0.55)
+        self._grid_phase_x = (self._grid_phase_x - cue_x * s["motion_sensitivity"] * dt * 45.0) % spacing
+        self._grid_phase_y = (self._grid_phase_y + cue_y * s["motion_sensitivity"] * dt * 45.0) % spacing
+        margin = spacing * 3
+
+        idx = 0
+        x0 = -margin + self._grid_phase_x
+        x = x0
+        while x <= self.SW + margin:
+            lid = self._grid_ids[idx]
+            self.canvas.coords(lid, x, -margin, x, self.SH + margin)
+            self.canvas.itemconfig(lid, fill=color)
+            idx += 1
+            x += spacing
+        y0 = -margin + self._grid_phase_y
+        y = y0
+        while y <= self.SH + margin and idx < len(self._grid_ids):
+            lid = self._grid_ids[idx]
+            self.canvas.coords(lid, -margin, y, self.SW + margin, y)
+            self.canvas.itemconfig(lid, fill=color)
+            idx += 1
+            y += spacing
 
     # ── Loop ─────────────────────────────────────────────────────────────────
     def _loop(self):
@@ -815,12 +921,16 @@ class OverlayApp:
 
         # Rebuild if dot count or layers changed
         if (s["dot_count"] != self._prev_count or
-                s["parallax_layers"] != self._prev_layers):
+                s["parallax_layers"] != self._prev_layers or
+                s.get("visual_style", "Dots") != self._prev_style):
             self._build_dots()
 
-        for dot in self._dots:
-            dot.update(self.cue_x, self.cue_y, self.srot, dt, s)
-            self._redraw_dot(dot)
+        if s.get("visual_style", "Dots") == "Grid":
+            self._redraw_grid(self.cue_x, self.cue_y, dt)
+        else:
+            for dot in self._dots:
+                dot.update(self.cue_x, self.cue_y, self.srot, dt, s)
+                self._redraw_dot(dot)
 
         self.canvas.tag_raise("gear")
         self.root.after(16, self._loop)
