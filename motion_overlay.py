@@ -54,6 +54,9 @@ DEFAULT_SETTINGS = {
     "damping_ratio":      1.05,
     "sensor_tau":         0.18,
     "max_accel":          4.0,
+    "swap_xy":            False,
+    "invert_x":           False,
+    "invert_y":           False,
     "gear_x":             -1,   # -1 = use default bottom-right
     "gear_y":             -1,
 }
@@ -196,11 +199,12 @@ class SettingsWindow:
         ("#ffa0c8", "Rose"),
     ]
 
-    def __init__(self, parent, settings, poller, on_rebuild, on_gear_move, sw, sh):
+    def __init__(self, parent, settings, poller, on_rebuild, on_gear_move, on_quit, sw, sh):
         self.settings   = settings
         self.poller     = poller
         self.on_rebuild  = on_rebuild
         self.on_gear_move = on_gear_move
+        self.on_quit      = on_quit
         self.SW, self.SH  = sw, sh
 
         self.win = tk.Toplevel(parent)
@@ -248,6 +252,9 @@ class SettingsWindow:
         tk.Button(bf, text="✕  Close", bg="#2a1a2a", fg="#c080c0",
                   font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
                   cursor="hand2", command=self.close).pack(side="left", padx=6)
+        tk.Button(bf, text="⏻  Exit App", bg="#602020", fg="#ffd0d0",
+                  font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+                  cursor="hand2", command=self.on_quit).pack(side="left", padx=6)
         self._save_lbl = tk.Label(footer, text="", bg="#12121e", fg="#70e090",
                                   font=("Segoe UI", 9))
         self._save_lbl.pack(pady=(0, 6))
@@ -352,6 +359,41 @@ class SettingsWindow:
         self._glow_var.trace_add("write",
             lambda *_: self.settings.update({"glow_enabled": self._glow_var.get()}))
         tk.Checkbutton(tog, text="Glow Effect", variable=self._glow_var,
+                       bg="#12121e", fg="#b0b0c0", selectcolor="#1e1e30",
+                       activebackground="#12121e", activeforeground="#c8dcff",
+                       font=("Segoe UI", 10)).pack(side="left")
+
+        tk.Frame(c, bg="#2a2a40", height=1).pack(fill="x", padx=14, pady=6)
+
+        # ── Axis calibration ──────────────────────────────────────────────────
+        tk.Label(c, text="Sensor Axis Calibration", bg="#12121e", fg="#b0b0c0",
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14)
+        tk.Label(c, text="Use these if motion goes the wrong way for your phone mount.",
+                 bg="#12121e", fg="#707090", font=("Segoe UI", 8)).pack(anchor="w", padx=14)
+
+        ac = tk.Frame(c, bg="#12121e")
+        ac.pack(fill="x", padx=14, pady=4)
+
+        self._swap_xy_var = tk.BooleanVar(value=self.settings.get("swap_xy", False))
+        self._swap_xy_var.trace_add("write",
+            lambda *_: self.settings.update({"swap_xy": self._swap_xy_var.get()}))
+        tk.Checkbutton(ac, text="Swap X/Y", variable=self._swap_xy_var,
+                       bg="#12121e", fg="#b0b0c0", selectcolor="#1e1e30",
+                       activebackground="#12121e", activeforeground="#c8dcff",
+                       font=("Segoe UI", 10)).pack(side="left", padx=(0, 16))
+
+        self._inv_x_var = tk.BooleanVar(value=self.settings.get("invert_x", False))
+        self._inv_x_var.trace_add("write",
+            lambda *_: self.settings.update({"invert_x": self._inv_x_var.get()}))
+        tk.Checkbutton(ac, text="Invert X", variable=self._inv_x_var,
+                       bg="#12121e", fg="#b0b0c0", selectcolor="#1e1e30",
+                       activebackground="#12121e", activeforeground="#c8dcff",
+                       font=("Segoe UI", 10)).pack(side="left", padx=(0, 16))
+
+        self._inv_y_var = tk.BooleanVar(value=self.settings.get("invert_y", False))
+        self._inv_y_var.trace_add("write",
+            lambda *_: self.settings.update({"invert_y": self._inv_y_var.get()}))
+        tk.Checkbutton(ac, text="Invert Y", variable=self._inv_y_var,
                        bg="#12121e", fg="#b0b0c0", selectcolor="#1e1e30",
                        activebackground="#12121e", activeforeground="#c8dcff",
                        font=("Segoe UI", 10)).pack(side="left")
@@ -679,9 +721,19 @@ class OverlayApp:
         self._last_t = now
 
         s     = self.settings
+        ax = self.poller.acc_x
+        ay = self.poller.acc_y
+
+        if s.get("swap_xy", False):
+            ax, ay = ay, ax
+        if s.get("invert_x", False):
+            ax = -ax
+        if s.get("invert_y", False):
+            ay = -ay
+
         accel_cap = max(0.5, float(s.get("max_accel", 4.0)))
-        raw_x = max(-accel_cap, min(accel_cap, self.poller.acc_x))
-        raw_y = max(-accel_cap, min(accel_cap, self.poller.acc_y))
+        raw_x = max(-accel_cap, min(accel_cap, ax))
+        raw_y = max(-accel_cap, min(accel_cap, ay))
         raw_r = self.poller.gyr_z if s["rotation_enabled"] else 0.0
 
         # Framerate-independent sensor low-pass filter:
@@ -714,6 +766,7 @@ class OverlayApp:
                 self.root, self.settings, self.poller,
                 on_rebuild=self._build_dots,
                 on_gear_move=self._move_gear,
+                on_quit=self._quit,
                 sw=self.SW, sh=self.SH)
 
     def _quit(self):
