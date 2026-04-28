@@ -51,6 +51,9 @@ DEFAULT_SETTINGS = {
     "rotation_enabled":   True,
     "poll_rate_hz":       20,
     "glow_enabled":       False,
+    "damping_ratio":      1.05,
+    "sensor_tau":         0.18,
+    "max_accel":          4.0,
     "gear_x":             -1,   # -1 = use default bottom-right
     "gear_y":             -1,
 }
@@ -131,9 +134,10 @@ class Dot:
         tgt_y = self.home_y + dy * sens * df * 25
 
         # Spring-damper: stiffness scales with Smoothing slider (higher = snappier).
-        # Slightly underdamped (0.85) gives a natural, living feel without overshoot.
-        spring_k = 30.0 + smth * 270.0
-        damp_c   = 2.0 * math.sqrt(spring_k) * 0.85
+        # Keep damping slightly above critical to remove "rebound" overshoot.
+        spring_k   = 18.0 + smth * 140.0
+        damp_ratio = max(0.7, float(s.get("damping_ratio", 1.05)))
+        damp_c     = 2.0 * math.sqrt(spring_k) * damp_ratio
 
         self.vx += ((tgt_x - self.x) * spring_k - self.vx * damp_c) * dt
         self.vy += ((tgt_y - self.y) * spring_k - self.vy * damp_c) * dt
@@ -145,10 +149,6 @@ class Dot:
             ca, sa = math.cos(ang), math.sin(ang)
             self.x = cx + rx * ca - ry * sa
             self.y = cy + rx * sa + ry * ca
-            # Rotate home too so the spring target stays coherent
-            rx2, ry2 = self.home_x - cx, self.home_y - cy
-            self.home_x = cx + rx2 * ca - ry2 * sa
-            self.home_y = cy + rx2 * sa + ry2 * ca
 
         self.x += self.vx * dt
         self.y += self.vy * dt
@@ -325,9 +325,12 @@ class SettingsWindow:
             ("Opacity",            "dot_opacity",         20,  255, True),
             ("Motion Sensitivity", "motion_sensitivity",  0.5, 10.0,False),
             ("Smoothing",          "smoothing",           0.01,1.0, False),
+            ("Damping Ratio",      "damping_ratio",       0.7, 1.8, False),
             ("Drift Speed",        "drift_speed",         0.0, 2.5, False),
             ("Parallax Layers",    "parallax_layers",     1,   5,   True),
             ("Poll Rate (Hz)",     "poll_rate_hz",        5,   60,  True),
+            ("Sensor Filter Tau",  "sensor_tau",          0.05,0.7, False),
+            ("Max Accel (m/s²)",   "max_accel",           1.0, 12.0,False),
         ]
         for args in sliders:
             self._make_slider(c, *args, PAD)
@@ -676,17 +679,18 @@ class OverlayApp:
         self._last_t = now
 
         s     = self.settings
-        raw_x = self.poller.acc_x
-        raw_y = self.poller.acc_y
+        accel_cap = max(0.5, float(s.get("max_accel", 4.0)))
+        raw_x = max(-accel_cap, min(accel_cap, self.poller.acc_x))
+        raw_y = max(-accel_cap, min(accel_cap, self.poller.acc_y))
         raw_r = self.poller.gyr_z if s["rotation_enabled"] else 0.0
 
-        # Fast sensor noise filter (fixed ~24 ms time-constant at 60 fps).
-        # The spring in each dot provides the perceived "smoothness"; this just
-        # removes high-frequency jitter from the Phyphox stream.
-        _SA = 0.7
-        self.sdx  += (raw_x - self.sdx)  * _SA
-        self.sdy  += (raw_y - self.sdy)  * _SA
-        self.srot += (raw_r - self.srot) * _SA
+        # Framerate-independent sensor low-pass filter:
+        # alpha = 1 - exp(-dt / tau). Larger tau => steadier, less twitchy.
+        tau = max(0.02, float(s.get("sensor_tau", 0.18)))
+        sa  = 1.0 - math.exp(-dt / tau)
+        self.sdx  += (raw_x - self.sdx)  * sa
+        self.sdy  += (raw_y - self.sdy)  * sa
+        self.srot += (raw_r - self.srot) * sa
 
         # Rebuild if dot count or layers changed
         if (s["dot_count"] != self._prev_count or
