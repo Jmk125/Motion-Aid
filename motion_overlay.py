@@ -51,6 +51,12 @@ DEFAULT_SETTINGS = {
     "rotation_enabled":   True,
     "poll_rate_hz":       20,
     "glow_enabled":       False,
+    "damping_ratio":      1.05,
+    "sensor_tau":         0.18,
+    "max_accel":          4.0,
+    "swap_xy":            False,
+    "invert_x":           False,
+    "invert_y":           False,
     "gear_x":             -1,   # -1 = use default bottom-right
     "gear_y":             -1,
 }
@@ -131,9 +137,10 @@ class Dot:
         tgt_y = self.home_y + dy * sens * df * 25
 
         # Spring-damper: stiffness scales with Smoothing slider (higher = snappier).
-        # Slightly underdamped (0.85) gives a natural, living feel without overshoot.
-        spring_k = 30.0 + smth * 270.0
-        damp_c   = 2.0 * math.sqrt(spring_k) * 0.85
+        # Keep damping slightly above critical to remove "rebound" overshoot.
+        spring_k   = 18.0 + smth * 140.0
+        damp_ratio = max(0.7, float(s.get("damping_ratio", 1.05)))
+        damp_c     = 2.0 * math.sqrt(spring_k) * damp_ratio
 
         self.vx += ((tgt_x - self.x) * spring_k - self.vx * damp_c) * dt
         self.vy += ((tgt_y - self.y) * spring_k - self.vy * damp_c) * dt
@@ -145,10 +152,6 @@ class Dot:
             ca, sa = math.cos(ang), math.sin(ang)
             self.x = cx + rx * ca - ry * sa
             self.y = cy + rx * sa + ry * ca
-            # Rotate home too so the spring target stays coherent
-            rx2, ry2 = self.home_x - cx, self.home_y - cy
-            self.home_x = cx + rx2 * ca - ry2 * sa
-            self.home_y = cy + rx2 * sa + ry2 * ca
 
         self.x += self.vx * dt
         self.y += self.vy * dt
@@ -196,11 +199,12 @@ class SettingsWindow:
         ("#ffa0c8", "Rose"),
     ]
 
-    def __init__(self, parent, settings, poller, on_rebuild, on_gear_move, sw, sh):
+    def __init__(self, parent, settings, poller, on_rebuild, on_gear_move, on_quit, sw, sh):
         self.settings   = settings
         self.poller     = poller
         self.on_rebuild  = on_rebuild
         self.on_gear_move = on_gear_move
+        self.on_quit      = on_quit
         self.SW, self.SH  = sw, sh
 
         self.win = tk.Toplevel(parent)
@@ -248,6 +252,9 @@ class SettingsWindow:
         tk.Button(bf, text="✕  Close", bg="#2a1a2a", fg="#c080c0",
                   font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
                   cursor="hand2", command=self.close).pack(side="left", padx=6)
+        tk.Button(bf, text="⏻  Exit App", bg="#602020", fg="#ffd0d0",
+                  font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+                  cursor="hand2", command=self.on_quit).pack(side="left", padx=6)
         self._save_lbl = tk.Label(footer, text="", bg="#12121e", fg="#70e090",
                                   font=("Segoe UI", 9))
         self._save_lbl.pack(pady=(0, 6))
@@ -325,9 +332,12 @@ class SettingsWindow:
             ("Opacity",            "dot_opacity",         20,  255, True),
             ("Motion Sensitivity", "motion_sensitivity",  0.5, 10.0,False),
             ("Smoothing",          "smoothing",           0.01,1.0, False),
+            ("Damping Ratio",      "damping_ratio",       0.7, 1.8, False),
             ("Drift Speed",        "drift_speed",         0.0, 2.5, False),
             ("Parallax Layers",    "parallax_layers",     1,   5,   True),
             ("Poll Rate (Hz)",     "poll_rate_hz",        5,   60,  True),
+            ("Sensor Filter Tau",  "sensor_tau",          0.05,0.7, False),
+            ("Max Accel (m/s²)",   "max_accel",           1.0, 12.0,False),
         ]
         for args in sliders:
             self._make_slider(c, *args, PAD)
@@ -349,6 +359,41 @@ class SettingsWindow:
         self._glow_var.trace_add("write",
             lambda *_: self.settings.update({"glow_enabled": self._glow_var.get()}))
         tk.Checkbutton(tog, text="Glow Effect", variable=self._glow_var,
+                       bg="#12121e", fg="#b0b0c0", selectcolor="#1e1e30",
+                       activebackground="#12121e", activeforeground="#c8dcff",
+                       font=("Segoe UI", 10)).pack(side="left")
+
+        tk.Frame(c, bg="#2a2a40", height=1).pack(fill="x", padx=14, pady=6)
+
+        # ── Axis calibration ──────────────────────────────────────────────────
+        tk.Label(c, text="Sensor Axis Calibration", bg="#12121e", fg="#b0b0c0",
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14)
+        tk.Label(c, text="Use these if motion goes the wrong way for your phone mount.",
+                 bg="#12121e", fg="#707090", font=("Segoe UI", 8)).pack(anchor="w", padx=14)
+
+        ac = tk.Frame(c, bg="#12121e")
+        ac.pack(fill="x", padx=14, pady=4)
+
+        self._swap_xy_var = tk.BooleanVar(value=self.settings.get("swap_xy", False))
+        self._swap_xy_var.trace_add("write",
+            lambda *_: self.settings.update({"swap_xy": self._swap_xy_var.get()}))
+        tk.Checkbutton(ac, text="Swap X/Y", variable=self._swap_xy_var,
+                       bg="#12121e", fg="#b0b0c0", selectcolor="#1e1e30",
+                       activebackground="#12121e", activeforeground="#c8dcff",
+                       font=("Segoe UI", 10)).pack(side="left", padx=(0, 16))
+
+        self._inv_x_var = tk.BooleanVar(value=self.settings.get("invert_x", False))
+        self._inv_x_var.trace_add("write",
+            lambda *_: self.settings.update({"invert_x": self._inv_x_var.get()}))
+        tk.Checkbutton(ac, text="Invert X", variable=self._inv_x_var,
+                       bg="#12121e", fg="#b0b0c0", selectcolor="#1e1e30",
+                       activebackground="#12121e", activeforeground="#c8dcff",
+                       font=("Segoe UI", 10)).pack(side="left", padx=(0, 16))
+
+        self._inv_y_var = tk.BooleanVar(value=self.settings.get("invert_y", False))
+        self._inv_y_var.trace_add("write",
+            lambda *_: self.settings.update({"invert_y": self._inv_y_var.get()}))
+        tk.Checkbutton(ac, text="Invert Y", variable=self._inv_y_var,
                        bg="#12121e", fg="#b0b0c0", selectcolor="#1e1e30",
                        activebackground="#12121e", activeforeground="#c8dcff",
                        font=("Segoe UI", 10)).pack(side="left")
@@ -676,17 +721,28 @@ class OverlayApp:
         self._last_t = now
 
         s     = self.settings
-        raw_x = self.poller.acc_x
-        raw_y = self.poller.acc_y
+        ax = self.poller.acc_x
+        ay = self.poller.acc_y
+
+        if s.get("swap_xy", False):
+            ax, ay = ay, ax
+        if s.get("invert_x", False):
+            ax = -ax
+        if s.get("invert_y", False):
+            ay = -ay
+
+        accel_cap = max(0.5, float(s.get("max_accel", 4.0)))
+        raw_x = max(-accel_cap, min(accel_cap, ax))
+        raw_y = max(-accel_cap, min(accel_cap, ay))
         raw_r = self.poller.gyr_z if s["rotation_enabled"] else 0.0
 
-        # Fast sensor noise filter (fixed ~24 ms time-constant at 60 fps).
-        # The spring in each dot provides the perceived "smoothness"; this just
-        # removes high-frequency jitter from the Phyphox stream.
-        _SA = 0.7
-        self.sdx  += (raw_x - self.sdx)  * _SA
-        self.sdy  += (raw_y - self.sdy)  * _SA
-        self.srot += (raw_r - self.srot) * _SA
+        # Framerate-independent sensor low-pass filter:
+        # alpha = 1 - exp(-dt / tau). Larger tau => steadier, less twitchy.
+        tau = max(0.02, float(s.get("sensor_tau", 0.18)))
+        sa  = 1.0 - math.exp(-dt / tau)
+        self.sdx  += (raw_x - self.sdx)  * sa
+        self.sdy  += (raw_y - self.sdy)  * sa
+        self.srot += (raw_r - self.srot) * sa
 
         # Rebuild if dot count or layers changed
         if (s["dot_count"] != self._prev_count or
@@ -710,6 +766,7 @@ class OverlayApp:
                 self.root, self.settings, self.poller,
                 on_rebuild=self._build_dots,
                 on_gear_move=self._move_gear,
+                on_quit=self._quit,
                 sw=self.SW, sh=self.SH)
 
     def _quit(self):
