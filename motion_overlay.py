@@ -56,6 +56,7 @@ DEFAULT_SETTINGS = {
     "damping_ratio":      1.05,
     "sensor_tau":         0.18,
     "max_accel":          4.0,
+    "motion_washout_tau": 0.65,
     "axis_lock_bias":     0.0,  # 0..1 strength; higher = stronger axis snapping
     "swap_xy":            False,
     "invert_x":           False,
@@ -414,6 +415,7 @@ class SettingsWindow:
             ("Poll Rate (Hz)",     "poll_rate_hz",        5,   60,  True),
             ("Sensor Filter Tau",  "sensor_tau",          0.05,0.7, False),
             ("Max Accel (m/s²)",   "max_accel",           1.0, 12.0,False),
+            ("Motion Washout",     "motion_washout_tau",  0.10, 2.2, False),
             ("Axis Lock Amount",   "axis_lock_bias",      0.0, 1.0, False),
         ]
         for args in sliders:
@@ -619,6 +621,7 @@ class SettingsWindow:
             "poll_rate_hz": "How often Phyphox data is requested.",
             "sensor_tau": "Sensor low-pass time constant (higher = steadier).",
             "max_accel": "Clamp on acceleration spikes (m/s²).",
+            "motion_washout_tau": "How quickly sustained motion fades toward zero (higher = longer).",
             "axis_lock_bias": "Reduce cross-axis motion by snapping toward X or Y direction.",
         }
         return tips.get(key, "")
@@ -752,6 +755,8 @@ class OverlayApp:
         self.settings_win  = None
 
         self.sdx = self.sdy = self.srot = 0.0
+        self.hp_x = self.hp_y = 0.0
+        self._prev_sdx = self._prev_sdy = 0.0
         self.bias_x = self.bias_y = 0.0
         self._prev_raw_x = self._prev_raw_y = 0.0
         self.cue_x = self.cue_y = 0.0
@@ -1016,25 +1021,20 @@ class OverlayApp:
         self.sdy  += (raw_y - self.sdy)  * sa
         self.srot += (raw_r - self.srot) * sa
 
-        # Motion cue tracking (low-latency, low-memory):
-        # Follow filtered acceleration directly so opposite direction changes
-        # are immediate and not "pulled" by prior motion.
+        # Washout (high-pass) filter:
+        # sustained acceleration decays away so constant-speed cruising trends
+        # toward no dot motion, while changes in acceleration remain visible.
+        wash_tau = max(0.05, float(s.get("motion_washout_tau", 0.65)))
+        hp_alpha = wash_tau / (wash_tau + dt)
+        self.hp_x = hp_alpha * (self.hp_x + self.sdx - self._prev_sdx)
+        self.hp_y = hp_alpha * (self.hp_y + self.sdy - self._prev_sdy)
+        self._prev_sdx, self._prev_sdy = self.sdx, self.sdy
+
+        # Motion cue tracking (low-latency, low-memory)
         cue_tau = 0.09
         cue_alpha = 1.0 - math.exp(-dt / cue_tau)
-        self.cue_x += (self.sdx - self.cue_x) * cue_alpha
-        self.cue_y += (self.sdy - self.cue_y) * cue_alpha
-
-        # Axis lock amount:
-        # 0.0 => free diagonal motion, 1.0 => snap to whichever axis is stronger.
-        lock_amt = max(0.0, min(1.0, float(s.get("axis_lock_bias", 0.0))))
-        cue_x, cue_y = self.cue_x, self.cue_y
-        if lock_amt > 0.0:
-            if abs(cue_x) >= abs(cue_y):
-                snapped_x, snapped_y = cue_x, 0.0
-            else:
-                snapped_x, snapped_y = 0.0, cue_y
-            cue_x = cue_x * (1.0 - lock_amt) + snapped_x * lock_amt
-            cue_y = cue_y * (1.0 - lock_amt) + snapped_y * lock_amt
+        self.cue_x += (self.hp_x - self.cue_x) * cue_alpha
+        self.cue_y += (self.hp_y - self.cue_y) * cue_alpha
 
         # Axis lock amount:
         # 0.0 => free diagonal motion, 1.0 => snap to whichever axis is stronger.
