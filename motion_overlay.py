@@ -50,7 +50,7 @@ DEFAULT_SETTINGS = {
     "smoothing":          0.10,
     "parallax_layers":    3,
     "drift_speed":        0.35,
-    "rotation_enabled":   True,
+    "rotation_enabled":   False,
     "poll_rate_hz":       20,
     "glow_enabled":       False,
     "damping_ratio":      1.05,
@@ -752,6 +752,8 @@ class OverlayApp:
         self.settings_win  = None
 
         self.sdx = self.sdy = self.srot = 0.0
+        self.bias_x = self.bias_y = 0.0
+        self._prev_raw_x = self._prev_raw_y = 0.0
         self.cue_x = self.cue_y = 0.0
         self._dots    = []
         self._dot_ids = {}
@@ -979,9 +981,31 @@ class OverlayApp:
         if s.get("invert_y", False):
             ay = -ay
 
+        # Adaptive bias estimator:
+        # when near-stationary, slowly learn sensor offset and subtract it.
+        # Helps remove "creep" after normal motion from tiny IMU bias.
+        station_acc = 0.12
+        station_rot = 0.08
+        if (abs(ax) < station_acc and
+                abs(ay) < station_acc and
+                abs(self.poller.gyr_z) < station_rot):
+            bias_alpha = 1.0 - math.exp(-dt / 3.5)
+            self.bias_x += (ax - self.bias_x) * bias_alpha
+            self.bias_y += (ay - self.bias_y) * bias_alpha
+
+        ax -= self.bias_x
+        ay -= self.bias_y
+
         accel_cap = max(0.5, float(s.get("max_accel", 4.0)))
         raw_x = max(-accel_cap, min(accel_cap, ax))
         raw_y = max(-accel_cap, min(accel_cap, ay))
+
+        # Spike guard: cap abrupt frame-to-frame jumps from sensor glitches.
+        max_step = max(0.15, accel_cap * dt * 10.0)
+        raw_x = self._prev_raw_x + max(-max_step, min(max_step, raw_x - self._prev_raw_x))
+        raw_y = self._prev_raw_y + max(-max_step, min(max_step, raw_y - self._prev_raw_y))
+        self._prev_raw_x, self._prev_raw_y = raw_x, raw_y
+
         raw_r = self.poller.gyr_z if s["rotation_enabled"] else 0.0
 
         # Framerate-independent sensor low-pass filter:
