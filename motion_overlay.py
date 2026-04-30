@@ -1016,20 +1016,25 @@ class OverlayApp:
         self.sdy  += (raw_y - self.sdy)  * sa
         self.srot += (raw_r - self.srot) * sa
 
-        # Inertial cue integrator:
-        # - integrates acceleration into a short-lived "motion intent"
-        # - suppresses tiny opposite-sign blips that cause rebound feel
-        # - washes out to zero when acceleration is gone
-        ix, iy = self.sdx, self.sdy
-        if self.cue_x * ix < 0 and abs(ix) < (abs(self.cue_x) * 0.75):
-            ix = 0.0
-        if self.cue_y * iy < 0 and abs(iy) < (abs(self.cue_y) * 0.75):
-            iy = 0.0
+        # Motion cue tracking (low-latency, low-memory):
+        # Follow filtered acceleration directly so opposite direction changes
+        # are immediate and not "pulled" by prior motion.
+        cue_tau = 0.09
+        cue_alpha = 1.0 - math.exp(-dt / cue_tau)
+        self.cue_x += (self.sdx - self.cue_x) * cue_alpha
+        self.cue_y += (self.sdy - self.cue_y) * cue_alpha
 
-        cue_gain = 1.8
-        washout = 1.35
-        self.cue_x = (self.cue_x + ix * cue_gain * dt) * math.exp(-washout * dt)
-        self.cue_y = (self.cue_y + iy * cue_gain * dt) * math.exp(-washout * dt)
+        # Axis lock amount:
+        # 0.0 => free diagonal motion, 1.0 => snap to whichever axis is stronger.
+        lock_amt = max(0.0, min(1.0, float(s.get("axis_lock_bias", 0.0))))
+        cue_x, cue_y = self.cue_x, self.cue_y
+        if lock_amt > 0.0:
+            if abs(cue_x) >= abs(cue_y):
+                snapped_x, snapped_y = cue_x, 0.0
+            else:
+                snapped_x, snapped_y = 0.0, cue_y
+            cue_x = cue_x * (1.0 - lock_amt) + snapped_x * lock_amt
+            cue_y = cue_y * (1.0 - lock_amt) + snapped_y * lock_amt
 
         # Axis lock amount:
         # 0.0 => free diagonal motion, 1.0 => snap to whichever axis is stronger.
