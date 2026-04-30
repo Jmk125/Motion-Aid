@@ -55,6 +55,7 @@ DEFAULT_SETTINGS = {
     "damping_ratio":      1.05,
     "sensor_tau":         0.18,
     "max_accel":          4.0,
+    "axis_lock_bias":     0.0,  # -1.0 => mostly Y-axis, +1.0 => mostly X-axis
     "swap_xy":            False,
     "invert_x":           False,
     "invert_y":           False,
@@ -286,6 +287,11 @@ class SettingsWindow:
                           cursor="hand2", command=self.on_quit)
         bexit.pack(side="left", padx=6)
         self._tip(bexit, "Stop the overlay application.")
+        breset = tk.Button(bf, text="↺  Reset Defaults", bg="#3a2e1e", fg="#ffe5b8",
+                           font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+                           cursor="hand2", command=self._reset_defaults)
+        breset.pack(side="left", padx=6)
+        self._tip(breset, "Reset all settings to defaults and rebuild visuals.")
         self._save_lbl = tk.Label(footer, text="", bg="#12121e", fg="#70e090",
                                   font=("Segoe UI", 9))
         self._save_lbl.pack(pady=(0, 6))
@@ -388,6 +394,7 @@ class SettingsWindow:
             ("Poll Rate (Hz)",     "poll_rate_hz",        5,   60,  True),
             ("Sensor Filter Tau",  "sensor_tau",          0.05,0.7, False),
             ("Max Accel (m/s²)",   "max_accel",           1.0, 12.0,False),
+            ("Axis Lock Bias",     "axis_lock_bias",     -1.0, 1.0, False),
         ]
         for args in sliders:
             self._make_slider(c, *args, PAD)
@@ -592,6 +599,7 @@ class SettingsWindow:
             "poll_rate_hz": "How often Phyphox data is requested.",
             "sensor_tau": "Sensor low-pass time constant (higher = steadier).",
             "max_accel": "Clamp on acceleration spikes (m/s²).",
+            "axis_lock_bias": "Blend toward one axis: -1 favors Y, +1 favors X.",
         }
         return tips.get(key, "")
 
@@ -630,6 +638,37 @@ class SettingsWindow:
     def _save(self):
         save_settings(self.settings)
         self._save_lbl.config(text="✓ Saved!")
+        self.win.after(2000, lambda: self._save_lbl.config(text=""))
+
+    def _reset_defaults(self):
+        self.settings.clear()
+        self.settings.update(dict(DEFAULT_SETTINGS))
+
+        self.ip_var.set(self.settings["phyphox_ip"])
+        self.port_var.set(self.settings["phyphox_port"])
+        self._style_var.set(self.settings.get("visual_style", "Dots"))
+
+        for key, var in self._svars.items():
+            if key in self.settings:
+                var.set(self.settings[key])
+
+        self._rot_var.set(self.settings["rotation_enabled"])
+        self._glow_var.set(self.settings.get("glow_enabled", False))
+        self._swap_xy_var.set(self.settings.get("swap_xy", False))
+        self._inv_x_var.set(self.settings.get("invert_x", False))
+        self._inv_y_var.set(self.settings.get("invert_y", False))
+        self._refresh_swatches()
+
+        gx = self.settings.get("gear_x", -1)
+        gy = self.settings.get("gear_y", -1)
+        if gx < 0:
+            gx = self.SW - 30
+        if gy < 0:
+            gy = self.SH - 30
+        self.on_gear_move(gx, gy)
+
+        self.on_rebuild()
+        self._save_lbl.config(text="↺ Reset to defaults")
         self.win.after(2000, lambda: self._save_lbl.config(text=""))
 
     def _update_status(self):
@@ -948,6 +987,14 @@ class OverlayApp:
         self.cue_x = (self.cue_x + ix * cue_gain * dt) * math.exp(-washout * dt)
         self.cue_y = (self.cue_y + iy * cue_gain * dt) * math.exp(-washout * dt)
 
+        # Axis lock blend: bias motion toward one primary axis.
+        # -1 => mostly vertical lane (Y), +1 => mostly horizontal lane (X)
+        axis_bias = max(-1.0, min(1.0, float(s.get("axis_lock_bias", 0.0))))
+        x_scale = 1.0 if axis_bias >= 0 else 1.0 - abs(axis_bias)
+        y_scale = 1.0 if axis_bias <= 0 else 1.0 - abs(axis_bias)
+        cue_x = self.cue_x * x_scale
+        cue_y = self.cue_y * y_scale
+
         # Rebuild if dot count or layers changed
         if (s["dot_count"] != self._prev_count or
                 s["parallax_layers"] != self._prev_layers or
@@ -955,10 +1002,10 @@ class OverlayApp:
             self._build_dots()
 
         if s.get("visual_style", "Dots") == "Grid":
-            self._redraw_grid(self.cue_x, self.cue_y, dt)
+            self._redraw_grid(cue_x, cue_y, dt)
         else:
             for dot in self._dots:
-                dot.update(self.cue_x, self.cue_y, self.srot, dt, s)
+                dot.update(cue_x, cue_y, self.srot, dt, s)
                 self._redraw_dot(dot)
 
         self.canvas.tag_raise("gear")
