@@ -219,12 +219,13 @@ class SettingsWindow:
         ("#ffa0c8", "Rose"),
     ]
 
-    def __init__(self, parent, settings, poller, on_rebuild, on_gear_move, on_quit, sw, sh):
+    def __init__(self, parent, settings, poller, on_rebuild, on_gear_move, on_quit, on_calibrate, sw, sh):
         self.settings   = settings
         self.poller     = poller
         self.on_rebuild  = on_rebuild
         self.on_gear_move = on_gear_move
         self.on_quit      = on_quit
+        self.on_calibrate = on_calibrate
         self.SW, self.SH  = sw, sh
         self._tips        = []
 
@@ -486,6 +487,11 @@ class SettingsWindow:
                                  font=("Segoe UI", 10))
         invy_cb.pack(side="left")
         self._tip(invy_cb, "Flip up/down motion direction.")
+        cal_btn = tk.Button(ac, text="Calibrate Neutral", bg="#1f3a2a", fg="#c8ffd8",
+                            font=("Segoe UI", 9), relief="flat", padx=8, pady=2,
+                            cursor="hand2", command=self._calibrate_neutral)
+        cal_btn.pack(side="right")
+        self._tip(cal_btn, "Capture current baseline while holding steady.")
 
         tk.Frame(c, bg="#2a2a40", height=1).pack(fill="x", padx=14, pady=6)
 
@@ -663,6 +669,11 @@ class SettingsWindow:
         self._save_lbl.config(text="✓ Saved!")
         self.win.after(2000, lambda: self._save_lbl.config(text=""))
 
+    def _calibrate_neutral(self):
+        self.on_calibrate()
+        self._save_lbl.config(text="◎ Neutral calibrated")
+        self.win.after(2000, lambda: self._save_lbl.config(text=""))
+
     def _reset_defaults(self):
         self.settings.clear()
         self.settings.update(dict(DEFAULT_SETTINGS))
@@ -759,6 +770,7 @@ class OverlayApp:
         self._prev_sdx = self._prev_sdy = 0.0
         self.bias_x = self.bias_y = 0.0
         self._prev_raw_x = self._prev_raw_y = 0.0
+        self._calibration_requested = False
         self.cue_x = self.cue_y = 0.0
         self._dots    = []
         self._dot_ids = {}
@@ -986,6 +998,16 @@ class OverlayApp:
         if s.get("invert_y", False):
             ay = -ay
 
+        if self._calibration_requested:
+            self.bias_x = ax
+            self.bias_y = ay
+            self.sdx = self.sdy = self.srot = 0.0
+            self.hp_x = self.hp_y = 0.0
+            self.cue_x = self.cue_y = 0.0
+            self._prev_sdx = self._prev_sdy = 0.0
+            self._prev_raw_x = self._prev_raw_y = 0.0
+            self._calibration_requested = False
+
         # Adaptive bias estimator:
         # when near-stationary, slowly learn sensor offset and subtract it.
         # Helps remove "creep" after normal motion from tiny IMU bias.
@@ -1075,7 +1097,11 @@ class OverlayApp:
                 on_rebuild=self._build_dots,
                 on_gear_move=self._move_gear,
                 on_quit=self._quit,
+                on_calibrate=self._request_calibration,
                 sw=self.SW, sh=self.SH)
+
+    def _request_calibration(self):
+        self._calibration_requested = True
 
     def _quit(self):
         self.poller.stop()
