@@ -55,7 +55,7 @@ DEFAULT_SETTINGS = {
     "damping_ratio":      1.05,
     "sensor_tau":         0.18,
     "max_accel":          4.0,
-    "axis_lock_bias":     0.0,  # -1.0 => mostly Y-axis, +1.0 => mostly X-axis
+    "axis_lock_bias":     0.0,  # 0..1 strength; higher = stronger axis snapping
     "swap_xy":            False,
     "invert_x":           False,
     "invert_y":           False,
@@ -394,7 +394,7 @@ class SettingsWindow:
             ("Poll Rate (Hz)",     "poll_rate_hz",        5,   60,  True),
             ("Sensor Filter Tau",  "sensor_tau",          0.05,0.7, False),
             ("Max Accel (m/s²)",   "max_accel",           1.0, 12.0,False),
-            ("Axis Lock Bias",     "axis_lock_bias",     -1.0, 1.0, False),
+            ("Axis Lock Amount",   "axis_lock_bias",      0.0, 1.0, False),
         ]
         for args in sliders:
             self._make_slider(c, *args, PAD)
@@ -599,7 +599,7 @@ class SettingsWindow:
             "poll_rate_hz": "How often Phyphox data is requested.",
             "sensor_tau": "Sensor low-pass time constant (higher = steadier).",
             "max_accel": "Clamp on acceleration spikes (m/s²).",
-            "axis_lock_bias": "Blend toward one axis: -1 favors Y, +1 favors X.",
+            "axis_lock_bias": "Reduce cross-axis motion by snapping toward X or Y direction.",
         }
         return tips.get(key, "")
 
@@ -987,13 +987,17 @@ class OverlayApp:
         self.cue_x = (self.cue_x + ix * cue_gain * dt) * math.exp(-washout * dt)
         self.cue_y = (self.cue_y + iy * cue_gain * dt) * math.exp(-washout * dt)
 
-        # Axis lock blend: bias motion toward one primary axis.
-        # -1 => mostly vertical lane (Y), +1 => mostly horizontal lane (X)
-        axis_bias = max(-1.0, min(1.0, float(s.get("axis_lock_bias", 0.0))))
-        x_scale = 1.0 if axis_bias >= 0 else 1.0 - abs(axis_bias)
-        y_scale = 1.0 if axis_bias <= 0 else 1.0 - abs(axis_bias)
-        cue_x = self.cue_x * x_scale
-        cue_y = self.cue_y * y_scale
+        # Axis lock amount:
+        # 0.0 => free diagonal motion, 1.0 => snap to whichever axis is stronger.
+        lock_amt = max(0.0, min(1.0, float(s.get("axis_lock_bias", 0.0))))
+        cue_x, cue_y = self.cue_x, self.cue_y
+        if lock_amt > 0.0:
+            if abs(cue_x) >= abs(cue_y):
+                snapped_x, snapped_y = cue_x, 0.0
+            else:
+                snapped_x, snapped_y = 0.0, cue_y
+            cue_x = cue_x * (1.0 - lock_amt) + snapped_x * lock_amt
+            cue_y = cue_y * (1.0 - lock_amt) + snapped_y * lock_amt
 
         # Rebuild if dot count or layers changed
         if (s["dot_count"] != self._prev_count or
