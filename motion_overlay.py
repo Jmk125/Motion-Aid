@@ -20,6 +20,7 @@ Controls:
 """
 
 import tkinter as tk
+from tkinter import ttk
 import threading
 import time
 import math
@@ -49,12 +50,13 @@ DEFAULT_SETTINGS = {
     "smoothing":          0.10,
     "parallax_layers":    3,
     "drift_speed":        0.35,
-    "rotation_enabled":   True,
+    "rotation_enabled":   False,
     "poll_rate_hz":       20,
     "glow_enabled":       False,
     "damping_ratio":      1.05,
     "sensor_tau":         0.18,
     "max_accel":          4.0,
+    "axis_lock_bias":     0.0,  # 0..1 strength; higher = stronger axis snapping
     "swap_xy":            False,
     "invert_x":           False,
     "invert_y":           False,
@@ -286,6 +288,11 @@ class SettingsWindow:
                           cursor="hand2", command=self.on_quit)
         bexit.pack(side="left", padx=6)
         self._tip(bexit, "Stop the overlay application.")
+        breset = tk.Button(bf, text="↺  Reset Defaults", bg="#3a2e1e", fg="#ffe5b8",
+                           font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+                           cursor="hand2", command=self._reset_defaults)
+        breset.pack(side="left", padx=6)
+        self._tip(breset, "Reset all settings to defaults and rebuild visuals.")
         self._save_lbl = tk.Label(footer, text="", bg="#12121e", fg="#70e090",
                                   font=("Segoe UI", 9))
         self._save_lbl.pack(pady=(0, 6))
@@ -295,9 +302,26 @@ class SettingsWindow:
         scroll_frame = tk.Frame(w, bg="#12121e")
         scroll_frame.pack(fill="both", expand=True)
 
-        scrollbar = tk.Scrollbar(scroll_frame, orient="vertical",
-                                 bg="#2a2a44", troughcolor="#12121e",
-                                 activebackground="#5060a0")
+        style = ttk.Style(self.win)
+        style.theme_use("clam")
+        style.configure(
+            "Motion.Vertical.TScrollbar",
+            gripcount=0,
+            background="#2e3f66",
+            darkcolor="#2e3f66",
+            lightcolor="#2e3f66",
+            troughcolor="#161628",
+            bordercolor="#12121e",
+            arrowcolor="#9fc0ff",
+            relief="flat",
+            borderwidth=0,
+        )
+        style.map(
+            "Motion.Vertical.TScrollbar",
+            background=[("active", "#3f5b94"), ("pressed", "#5572aa")],
+        )
+        scrollbar = ttk.Scrollbar(
+            scroll_frame, orient="vertical", style="Motion.Vertical.TScrollbar")
         scrollbar.pack(side="right", fill="y")
 
         self._scroll_canvas = tk.Canvas(scroll_frame, bg="#12121e",
@@ -328,6 +352,8 @@ class SettingsWindow:
             self._scroll_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
         self._scroll_canvas.bind("<MouseWheel>", on_mousewheel)
         inner.bind("<MouseWheel>", on_mousewheel)
+        self._scroll_canvas.bind("<Enter>", lambda _e: self._scroll_canvas.bind_all("<MouseWheel>", on_mousewheel))
+        self._scroll_canvas.bind("<Leave>", lambda _e: self._scroll_canvas.unbind_all("<MouseWheel>"))
 
         # Now build all content into `inner` instead of `w`
         c = inner  # alias — all content packs into here
@@ -388,6 +414,7 @@ class SettingsWindow:
             ("Poll Rate (Hz)",     "poll_rate_hz",        5,   60,  True),
             ("Sensor Filter Tau",  "sensor_tau",          0.05,0.7, False),
             ("Max Accel (m/s²)",   "max_accel",           1.0, 12.0,False),
+            ("Axis Lock Amount",   "axis_lock_bias",      0.0, 1.0, False),
         ]
         for args in sliders:
             self._make_slider(c, *args, PAD)
@@ -544,7 +571,7 @@ class SettingsWindow:
 
         # Set a sensible fixed window height so it fits on screen
         win_h = min(sh - 80, 680)
-        self.win.geometry(f"360x{win_h}")
+        self.win.geometry(f"440x{win_h}")
 
     def _make_slider(self, parent, label, key, lo, hi, is_int, PAD):
         frame = tk.Frame(parent, bg="#12121e")
@@ -592,6 +619,7 @@ class SettingsWindow:
             "poll_rate_hz": "How often Phyphox data is requested.",
             "sensor_tau": "Sensor low-pass time constant (higher = steadier).",
             "max_accel": "Clamp on acceleration spikes (m/s²).",
+            "axis_lock_bias": "Reduce cross-axis motion by snapping toward X or Y direction.",
         }
         return tips.get(key, "")
 
@@ -630,6 +658,37 @@ class SettingsWindow:
     def _save(self):
         save_settings(self.settings)
         self._save_lbl.config(text="✓ Saved!")
+        self.win.after(2000, lambda: self._save_lbl.config(text=""))
+
+    def _reset_defaults(self):
+        self.settings.clear()
+        self.settings.update(dict(DEFAULT_SETTINGS))
+
+        self.ip_var.set(self.settings["phyphox_ip"])
+        self.port_var.set(self.settings["phyphox_port"])
+        self._style_var.set(self.settings.get("visual_style", "Dots"))
+
+        for key, var in self._svars.items():
+            if key in self.settings:
+                var.set(self.settings[key])
+
+        self._rot_var.set(self.settings["rotation_enabled"])
+        self._glow_var.set(self.settings.get("glow_enabled", False))
+        self._swap_xy_var.set(self.settings.get("swap_xy", False))
+        self._inv_x_var.set(self.settings.get("invert_x", False))
+        self._inv_y_var.set(self.settings.get("invert_y", False))
+        self._refresh_swatches()
+
+        gx = self.settings.get("gear_x", -1)
+        gy = self.settings.get("gear_y", -1)
+        if gx < 0:
+            gx = self.SW - 30
+        if gy < 0:
+            gy = self.SH - 30
+        self.on_gear_move(gx, gy)
+
+        self.on_rebuild()
+        self._save_lbl.config(text="↺ Reset to defaults")
         self.win.after(2000, lambda: self._save_lbl.config(text=""))
 
     def _update_status(self):
@@ -693,6 +752,8 @@ class OverlayApp:
         self.settings_win  = None
 
         self.sdx = self.sdy = self.srot = 0.0
+        self.bias_x = self.bias_y = 0.0
+        self._prev_raw_x = self._prev_raw_y = 0.0
         self.cue_x = self.cue_y = 0.0
         self._dots    = []
         self._dot_ids = {}
@@ -920,9 +981,31 @@ class OverlayApp:
         if s.get("invert_y", False):
             ay = -ay
 
+        # Adaptive bias estimator:
+        # when near-stationary, slowly learn sensor offset and subtract it.
+        # Helps remove "creep" after normal motion from tiny IMU bias.
+        station_acc = 0.12
+        station_rot = 0.08
+        if (abs(ax) < station_acc and
+                abs(ay) < station_acc and
+                abs(self.poller.gyr_z) < station_rot):
+            bias_alpha = 1.0 - math.exp(-dt / 3.5)
+            self.bias_x += (ax - self.bias_x) * bias_alpha
+            self.bias_y += (ay - self.bias_y) * bias_alpha
+
+        ax -= self.bias_x
+        ay -= self.bias_y
+
         accel_cap = max(0.5, float(s.get("max_accel", 4.0)))
         raw_x = max(-accel_cap, min(accel_cap, ax))
         raw_y = max(-accel_cap, min(accel_cap, ay))
+
+        # Spike guard: cap abrupt frame-to-frame jumps from sensor glitches.
+        max_step = max(0.15, accel_cap * dt * 10.0)
+        raw_x = self._prev_raw_x + max(-max_step, min(max_step, raw_x - self._prev_raw_x))
+        raw_y = self._prev_raw_y + max(-max_step, min(max_step, raw_y - self._prev_raw_y))
+        self._prev_raw_x, self._prev_raw_y = raw_x, raw_y
+
         raw_r = self.poller.gyr_z if s["rotation_enabled"] else 0.0
 
         # Framerate-independent sensor low-pass filter:
@@ -933,20 +1016,25 @@ class OverlayApp:
         self.sdy  += (raw_y - self.sdy)  * sa
         self.srot += (raw_r - self.srot) * sa
 
-        # Inertial cue integrator:
-        # - integrates acceleration into a short-lived "motion intent"
-        # - suppresses tiny opposite-sign blips that cause rebound feel
-        # - washes out to zero when acceleration is gone
-        ix, iy = self.sdx, self.sdy
-        if self.cue_x * ix < 0 and abs(ix) < (abs(self.cue_x) * 0.75):
-            ix = 0.0
-        if self.cue_y * iy < 0 and abs(iy) < (abs(self.cue_y) * 0.75):
-            iy = 0.0
+        # Motion cue tracking (low-latency, low-memory):
+        # Follow filtered acceleration directly so opposite direction changes
+        # are immediate and not "pulled" by prior motion.
+        cue_tau = 0.09
+        cue_alpha = 1.0 - math.exp(-dt / cue_tau)
+        self.cue_x += (self.sdx - self.cue_x) * cue_alpha
+        self.cue_y += (self.sdy - self.cue_y) * cue_alpha
 
-        cue_gain = 1.8
-        washout = 1.35
-        self.cue_x = (self.cue_x + ix * cue_gain * dt) * math.exp(-washout * dt)
-        self.cue_y = (self.cue_y + iy * cue_gain * dt) * math.exp(-washout * dt)
+        # Axis lock amount:
+        # 0.0 => free diagonal motion, 1.0 => snap to whichever axis is stronger.
+        lock_amt = max(0.0, min(1.0, float(s.get("axis_lock_bias", 0.0))))
+        cue_x, cue_y = self.cue_x, self.cue_y
+        if lock_amt > 0.0:
+            if abs(cue_x) >= abs(cue_y):
+                snapped_x, snapped_y = cue_x, 0.0
+            else:
+                snapped_x, snapped_y = 0.0, cue_y
+            cue_x = cue_x * (1.0 - lock_amt) + snapped_x * lock_amt
+            cue_y = cue_y * (1.0 - lock_amt) + snapped_y * lock_amt
 
         # Rebuild if dot count or layers changed
         if (s["dot_count"] != self._prev_count or
@@ -955,10 +1043,10 @@ class OverlayApp:
             self._build_dots()
 
         if s.get("visual_style", "Dots") == "Grid":
-            self._redraw_grid(self.cue_x, self.cue_y, dt)
+            self._redraw_grid(cue_x, cue_y, dt)
         else:
             for dot in self._dots:
-                dot.update(self.cue_x, self.cue_y, self.srot, dt, s)
+                dot.update(cue_x, cue_y, self.srot, dt, s)
                 self._redraw_dot(dot)
 
         self.canvas.tag_raise("gear")
