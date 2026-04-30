@@ -20,6 +20,7 @@ Controls:
 """
 
 import tkinter as tk
+from tkinter import ttk
 import threading
 import time
 import math
@@ -301,9 +302,26 @@ class SettingsWindow:
         scroll_frame = tk.Frame(w, bg="#12121e")
         scroll_frame.pack(fill="both", expand=True)
 
-        scrollbar = tk.Scrollbar(scroll_frame, orient="vertical",
-                                 bg="#2a2a44", troughcolor="#12121e",
-                                 activebackground="#5060a0")
+        style = ttk.Style(self.win)
+        style.theme_use("clam")
+        style.configure(
+            "Motion.Vertical.TScrollbar",
+            gripcount=0,
+            background="#2e3f66",
+            darkcolor="#2e3f66",
+            lightcolor="#2e3f66",
+            troughcolor="#161628",
+            bordercolor="#12121e",
+            arrowcolor="#9fc0ff",
+            relief="flat",
+            borderwidth=0,
+        )
+        style.map(
+            "Motion.Vertical.TScrollbar",
+            background=[("active", "#3f5b94"), ("pressed", "#5572aa")],
+        )
+        scrollbar = ttk.Scrollbar(
+            scroll_frame, orient="vertical", style="Motion.Vertical.TScrollbar")
         scrollbar.pack(side="right", fill="y")
 
         self._scroll_canvas = tk.Canvas(scroll_frame, bg="#12121e",
@@ -334,6 +352,8 @@ class SettingsWindow:
             self._scroll_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
         self._scroll_canvas.bind("<MouseWheel>", on_mousewheel)
         inner.bind("<MouseWheel>", on_mousewheel)
+        self._scroll_canvas.bind("<Enter>", lambda _e: self._scroll_canvas.bind_all("<MouseWheel>", on_mousewheel))
+        self._scroll_canvas.bind("<Leave>", lambda _e: self._scroll_canvas.unbind_all("<MouseWheel>"))
 
         # Now build all content into `inner` instead of `w`
         c = inner  # alias — all content packs into here
@@ -551,7 +571,7 @@ class SettingsWindow:
 
         # Set a sensible fixed window height so it fits on screen
         win_h = min(sh - 80, 680)
-        self.win.geometry(f"360x{win_h}")
+        self.win.geometry(f"440x{win_h}")
 
     def _make_slider(self, parent, label, key, lo, hi, is_int, PAD):
         frame = tk.Frame(parent, bg="#12121e")
