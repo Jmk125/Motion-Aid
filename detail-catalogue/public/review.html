@@ -31,6 +31,10 @@
       <div><span class="spinner"></span> Loading sheets…</div>
     </div>
 
+    <div id="scannedPdfWarning" class="alert alert-info" style="display:none; margin-bottom:16px;">
+      ⚠️ No text layer was detected in these PDFs (likely scanned drawings). All pages are shown — manually select the detail sheets you want to process.
+    </div>
+
     <div id="sheetsSection" style="display:none;">
       <div class="card" style="padding:0; overflow:hidden;">
         <table class="sheet-table" id="sheetTable">
@@ -114,6 +118,10 @@
         }
 
         document.getElementById('sheetsSection').style.display = 'block';
+        const anyDetected = sheets.some(s => s.is_detail_sheet);
+        if (!anyDetected) {
+          document.getElementById('scannedPdfWarning').style.display = 'block';
+        }
         renderSheets();
       } catch (e) {
         document.getElementById('loadingState').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;

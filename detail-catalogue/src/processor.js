@@ -11,36 +11,53 @@ function ensureDetailsDir() {
   fs.mkdirSync(DETAILS_DIR, { recursive: true });
 }
 
-// ─── Text extraction via pdfjs-dist ──────────────────────────────────────────
+// ─── Text extraction via pdf-parse ───────────────────────────────────────────
 
 async function extractSheetsFromPdf(uploadId) {
-  // Lazy require to avoid issues with ESM/CJS boundary
-  let pdfjsLib;
-  try {
-    pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
-  } catch (e) {
-    throw new Error('pdfjs-dist not available: ' + e.message);
-  }
+  const pdfParse = require('pdf-parse');
 
   const upload = db.getUpload(uploadId);
   if (!upload) throw new Error('Upload not found: ' + uploadId);
 
-  const data = new Uint8Array(fs.readFileSync(upload.file_path));
-  const loadingTask = pdfjsLib.getDocument({ data });
-  const pdfDoc = await loadingTask.promise;
-  const numPages = pdfDoc.numPages;
+  const fileBuffer = fs.readFileSync(upload.file_path);
+
+  // Parse entire PDF to get page count and per-page text
+  const pageTexts = [];
+  let numPages = 0;
+
+  try {
+    await pdfParse(fileBuffer, {
+      pagerender: function(pageData) {
+        return pageData.getTextContent().then(tc => {
+          const text = tc.items.map(i => i.str).join(' ');
+          pageTexts.push(text);
+        });
+      }
+    });
+    numPages = pageTexts.length;
+  } catch (err) {
+    // If parsing fails entirely, we can still try to get page count
+    try {
+      const basic = await pdfParse(fileBuffer);
+      numPages = basic.numpages || 0;
+    } catch (e2) {
+      throw new Error('Could not parse PDF: ' + err.message);
+    }
+  }
+
+  if (numPages === 0) throw new Error('PDF appears to have no pages');
 
   db.updateUpload(uploadId, { page_count: numPages, status: 'scanned' });
 
   const sheets = [];
+  const hasUsefulText = pageTexts.some(t => t && t.trim().length > 30);
 
   for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-    const page = await pdfDoc.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const text = textContent.items.map(item => item.str).join(' ');
-
+    const text = pageTexts[pageNum - 1] || '';
     const { sheetNumber, sheetTitle } = parseSheetInfo(text);
-    const isDetail = isDetailSheet(sheetNumber, sheetTitle, text);
+    // If the PDF has no extractable text (scanned), flag all pages as potential detail sheets
+    // so the user can pick them on the review screen
+    const isDetail = hasUsefulText ? isDetailSheet(sheetNumber, sheetTitle, text) : false;
 
     const sheet = db.createSheet({
       upload_id: uploadId,

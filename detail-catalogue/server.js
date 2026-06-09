@@ -7,7 +7,7 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3051;
 
 // Ensure required directories exist
 const BASE = __dirname;

@@ -37,46 +37,42 @@
     </div>
 
     <!-- Step 2: File upload -->
-    <div id="step2" class="step-content">
-      <div class="card">
-        <h3 style="margin-bottom:16px;">Upload Drawing PDFs</h3>
-        <label class="drop-zone" id="dropZone">
-          <div class="icon">📁</div>
-          <p><strong>Click to select PDFs</strong> or drag and drop here</p>
-          <p style="margin-top:4px; font-size:12px;">Multiple files supported · PDF only · Max 500 MB each</p>
-          <input type="file" id="fileInput" accept=".pdf,application/pdf" multiple>
-        </label>
+    <div id="step2" class="step-content card">
+      <h3 style="margin-bottom:16px;">Upload Drawing PDFs</h3>
+      <label class="drop-zone" id="dropZone">
+        <div class="icon">📁</div>
+        <p><strong>Click to select PDFs</strong> or drag and drop here</p>
+        <p style="margin-top:4px; font-size:12px;">Multiple files supported · PDF only · Max 500 MB each</p>
+        <input type="file" id="fileInput" accept=".pdf,application/pdf" multiple>
+      </label>
 
-        <ul class="file-list" id="fileList"></ul>
+      <ul class="file-list" id="fileList"></ul>
 
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
-          <span id="uploadStatus" style="font-size:13px; color:var(--muted);"></span>
-          <button class="btn btn-primary" id="uploadBtn" onclick="uploadFiles()" disabled>Upload & Scan →</button>
-        </div>
-        <div id="uploadError" class="alert alert-error" style="display:none; margin-top:12px;"></div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
+        <span id="uploadStatus" style="font-size:13px; color:var(--muted);"></span>
+        <button class="btn btn-primary" id="uploadBtn" onclick="uploadFiles()" disabled>Upload & Scan →</button>
       </div>
+      <div id="uploadError" class="alert alert-error" style="display:none; margin-top:12px;"></div>
     </div>
 
     <!-- Step 3: Scan progress -->
-    <div id="step3" class="step-content">
-      <div class="card">
-        <h3 style="margin-bottom:16px;">Scanning Sheets…</h3>
-        <div id="scanProgress">
-          <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
-            <div class="spinner"></div>
-            <span id="scanMessage" style="font-size:14px;">Starting…</span>
-          </div>
-          <div class="progress-wrap">
-            <div class="progress-bar" id="scanBar" style="width:0%"></div>
-          </div>
-          <div id="scanDetail" style="font-size:12px; color:var(--muted); margin-top:4px;"></div>
+    <div id="step3" class="step-content card">
+      <h3 style="margin-bottom:16px;">Scanning Sheets…</h3>
+      <div id="scanProgress">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+          <div class="spinner"></div>
+          <span id="scanMessage" style="font-size:14px;">Starting…</span>
         </div>
-        <div id="scanDone" style="display:none;">
-          <div class="alert alert-success">✅ Scan complete! Review the detected sheets and confirm which to process.</div>
-          <a id="reviewLink" href="#" class="btn btn-primary" style="margin-top:8px;">Review Sheets →</a>
+        <div class="progress-wrap">
+          <div class="progress-bar" id="scanBar" style="width:0%"></div>
         </div>
-        <div id="scanError" class="alert alert-error" style="display:none; margin-top:12px;"></div>
+        <div id="scanDetail" style="font-size:12px; color:var(--muted); margin-top:4px;"></div>
       </div>
+      <div id="scanDone" style="display:none;">
+        <div class="alert alert-success">✅ Scan complete! Review the detected sheets and confirm which to process.</div>
+        <a id="reviewLink" href="#" class="btn btn-primary" style="margin-top:8px;">Review Sheets →</a>
+      </div>
+      <div id="scanError" class="alert alert-error" style="display:none; margin-top:12px;"></div>
     </div>
   </div>
 
